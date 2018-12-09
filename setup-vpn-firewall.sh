@@ -1,7 +1,5 @@
 #!/bin/bash -e
 
-set -x
-
 function error {
   echo $1
   exit 1
@@ -11,20 +9,15 @@ function error {
 
 # Install required packages
 export DEBIAN_FRONTEND=noninteractive
-#apt-get -o Acquire::ForceIPv4=true update
-#apt-get -o Acquire::ForceIPv4=true --with-new-pkgs upgrade -y
-#apt autoremove -y
-#apt-get -o Acquire::ForceIPv4=true install -y strongswan libstrongswan-standard-plugins strongswan-libcharon libcharon-extra-plugins moreutils iptables-persistent
+apt-get -o Acquire::ForceIPv4=true update
+apt-get -o Acquire::ForceIPv4=true --with-new-pkgs upgrade -y
+apt autoremove -y
+apt-get -o Acquire::ForceIPv4=true install -y strongswan libstrongswan-standard-plugins strongswan-libcharon libcharon-extra-plugins moreutils iptables-persistent
 
-# DNS server used on the internal network
-LOCALDNS=$(dhcpcd -T | grep domain_name_servers | cut -d"=" -f2 | sed -e "s/'//g")
-
-# Network interface used
-NETINTERFACE=$(ip route get 8.8.8.8 | awk -- '{printf $5}')
-# Internal IP
-IP=$(ifdata -pa $NETINTERFACE)
-EXTERNALIP=$(dig +short myip.opendns.com @resolver1.opendns.com)
+NET_INTERFACE=$(ip route get 8.8.8.8 | awk -- '{printf $5}')
+EXTERNAL_IP=$(dig +short myip.opendns.com @resolver1.opendns.com)
 SUBNET=$(ip route | grep proto | awk -- '{ print $1 }')
+LOCAL_DNS=$(dhcpcd -T | grep domain_name_servers | cut -d"=" -f2 | sed -e "s/'//g")
 
 # set the firewall
 iptables -P INPUT   ACCEPT
@@ -68,11 +61,11 @@ iptables -A FORWARD --match policy --pol ipsec --dir in  --proto esp -s $SUBNET 
 iptables -A FORWARD --match policy --pol ipsec --dir out --proto esp -d $SUBNET -j ACCEPT
 
 # reduce MTU/MSS values for dumb VPN clients
-iptables -t mangle -A FORWARD --match policy --pol ipsec --dir in -s $SUBNET -o $NETINTERFACE -p tcp -m tcp --tcp-flags SYN,RST SYN -m tcpmss --mss 1361:1536 -j TCPMSS --set-mss 1360
+iptables -t mangle -A FORWARD --match policy --pol ipsec --dir in -s $SUBNET -o $NET_INTERFACE -p tcp -m tcp --tcp-flags SYN,RST SYN -m tcpmss --mss 1361:1536 -j TCPMSS --set-mss 1360
 
 # masquerade VPN traffic over eth0 etc.
-iptables -t nat -A POSTROUTING -s $SUBNET -o $NETINTERFACE -m policy --pol ipsec --dir out -j ACCEPT  # exempt IPsec traffic from masquerading
-iptables -t nat -A POSTROUTING -s $SUBNET -o $NETINTERFACE -j MASQUERADE
+iptables -t nat -A POSTROUTING -s $SUBNET -o $NET_INTERFACE -m policy --pol ipsec --dir out -j ACCEPT  # exempt IPsec traffic from masquerading
+iptables -t nat -A POSTROUTING -s $SUBNET -o $NET_INTERFACE -j MASQUERADE
 
 
 # fall through to drop any other input and forward traffic
@@ -104,11 +97,7 @@ net.ipv6.conf.lo.disable_ipv6 = 1
 
 sysctl -p
 
-
 # Set Strongswan config
-# these ike and esp settings are tested on Mac 10.14, iOS 12 and Windows 10
-# iOS and Mac with appropriate configuration profiles use AES_GCM_16_256/PRF_HMAC_SHA2_384/ECP_521 
-# Windows 10 uses AES_GCM_16_256/PRF_HMAC_SHA2_384/ECP_384
 echo "config setup
   strictcrlpolicy=yes
   uniqueids=never
@@ -124,14 +113,13 @@ conn roadwarrior
   dpddelay=900s
   rekey=no
   left=%any
-  leftid=${EXTERNALIP}
+  leftid=${EXTERNAL_IP}
   leftsubnet=0.0.0.0/0
   leftauth=psk
   right=%any
   rightid=%any
-  rightdns=${LOCALDNS}
+  rightdns=${LOCAL_DNS}
   rightsourceip=%dhcp
-  #rightsourceip=${SUBNET}
   rightauth=psk
   rightauth2=xauth
 " > /etc/ipsec.conf
